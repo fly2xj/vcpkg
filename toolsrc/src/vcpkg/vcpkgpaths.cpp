@@ -14,6 +14,7 @@ namespace vcpkg
     static constexpr CStringView V_120 = "v120";
     static constexpr CStringView V_140 = "v140";
     static constexpr CStringView V_141 = "v141";
+    static constexpr CStringView V_141_XP = "v141_xp";
 
     static bool exists_and_has_equal_or_greater_version(const std::string& version_cmd,
                                                         const std::array<int, 3>& expected_version)
@@ -115,7 +116,7 @@ namespace vcpkg
     static fs::path get_cmake_path(const fs::path& downloads_folder, const fs::path& scripts_folder)
     {
 #if defined(_WIN32)
-        static constexpr std::array<int, 3> EXPECTED_VERSION = {3, 10, 1};
+        static constexpr std::array<int, 3> EXPECTED_VERSION = {3, 10, 2};
 #else
         static constexpr std::array<int, 3> EXPECTED_VERSION = {3, 5, 1};
 #endif
@@ -124,7 +125,7 @@ namespace vcpkg
         const std::vector<fs::path> from_path = Files::find_from_PATH("cmake");
 
         std::vector<fs::path> candidate_paths;
-        const fs::path downloaded_copy = downloads_folder / "cmake-3.10.1-win32-x86" / "bin" / "cmake.exe";
+        const fs::path downloaded_copy = downloads_folder / "cmake-3.10.2-win32-x86" / "bin" / "cmake.exe";
 #if defined(_WIN32)
         candidate_paths.push_back(downloaded_copy);
 #endif
@@ -453,6 +454,15 @@ namespace vcpkg
                         }
 
                         found_toolsets.push_back(v141toolset);
+
+                        //add additional toolsets
+                        if(fs.exists(vs_instance.root_path / "Common7" / "IDE" / "VC" / "VCTargets" /  "Platforms" / 
+                            "Win32" / "PlatformToolsets" / "v141_xp"))
+                        {
+                            const Toolset v141xptoolset = Toolset{vs_instance.root_path, dumpbin_path, vcvarsall_bat,
+                                {}, V_141_XP, supported_architectures};
+                            found_toolsets.push_back(v141xptoolset);
+                        }
 
                         if (v140_is_available)
                         {

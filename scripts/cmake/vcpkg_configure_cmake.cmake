@@ -67,6 +67,9 @@ function(vcpkg_configure_cmake)
     elseif(VCPKG_TARGET_ARCHITECTURE STREQUAL "arm64" OR VCPKG_TARGET_ARCHITECTURE STREQUAL "arm")
         # Arm64 usage should be allowed once github issue #2375 is resolved
         set(NINJA_CAN_BE_USED OFF)
+    elseif(NOT VCPKG_PLATFORM_TOOLSET MATCHES "^v[0-9][0-9][0-9]?(_xp)?$")
+        # Custom toolsets are supported only for MSBuild generator
+        set(NINJA_CAN_BE_USED OFF)
     endif()
 
     if(_csc_GENERATOR)
@@ -108,6 +111,11 @@ function(vcpkg_configure_cmake)
         vcpkg_find_acquire_program(NINJA)
         get_filename_component(NINJA_PATH ${NINJA} DIRECTORY)
         set(ENV{PATH} "$ENV{PATH};${NINJA_PATH}")
+    endif()
+
+    # If we do not use Ninja, set toolset
+    if(NOT GENERATOR STREQUAL "Ninja")
+        set(TOOLSET "-T${VCPKG_PLATFORM_TOOLSET}")
     endif()
 
     file(REMOVE_RECURSE ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg)
@@ -170,6 +178,11 @@ function(vcpkg_configure_cmake)
             message(FATAL_ERROR "Invalid setting for VCPKG_CRT_LINKAGE: \"${VCPKG_CRT_LINKAGE}\". It must be \"static\" or \"dynamic\"")
         endif()
 
+
+        list(APPEND _csc_OPTIONS_DEBUG
+            "-DCMAKE_SHARED_LINKER_FLAGS_DEBUG=/DEBUG /INCREMENTAL:NO ${VCPKG_LINKER_FLAGS}"
+            "-DCMAKE_EXE_LINKER_FLAGS_DEBUG=/DEBUG /INCREMENTAL:NO ${VCPKG_LINKER_FLAGS}"
+        )
         list(APPEND _csc_OPTIONS_RELEASE
             "-DCMAKE_SHARED_LINKER_FLAGS_RELEASE=/DEBUG /INCREMENTAL:NO /OPT:REF /OPT:ICF ${VCPKG_LINKER_FLAGS}"
             "-DCMAKE_EXE_LINKER_FLAGS_RELEASE=/DEBUG /INCREMENTAL:NO /OPT:REF /OPT:ICF ${VCPKG_LINKER_FLAGS}"
@@ -198,32 +211,78 @@ function(vcpkg_configure_cmake)
         )
     endif()
 
-    if(NOT DEFINED VCPKG_BUILD_TYPE OR VCPKG_BUILD_TYPE STREQUAL "release")
-        message(STATUS "Configuring ${TARGET_TRIPLET}-rel")
-        file(MAKE_DIRECTORY ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel)
-        vcpkg_execute_required_process(
-            COMMAND ${CMAKE_COMMAND} ${_csc_SOURCE_PATH} ${_csc_OPTIONS} ${_csc_OPTIONS_RELEASE}
-                -G ${GENERATOR}
-                -DCMAKE_BUILD_TYPE=Release
-                -DCMAKE_INSTALL_PREFIX=${CURRENT_PACKAGES_DIR}
-            WORKING_DIRECTORY ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel
-            LOGNAME config-${TARGET_TRIPLET}-rel
-        )
-        message(STATUS "Configuring ${TARGET_TRIPLET}-rel done")
-    endif()
+    set(rel_command
+        ${CMAKE_COMMAND} ${_csc_SOURCE_PATH} ${_csc_OPTIONS} ${_csc_OPTIONS_RELEASE}
+        -G ${GENERATOR}
+        ${TOOLSET}
+        -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_INSTALL_PREFIX=${CURRENT_PACKAGES_DIR})
+    set(dbg_command
+        ${CMAKE_COMMAND} ${_csc_SOURCE_PATH} ${_csc_OPTIONS} ${_csc_OPTIONS_DEBUG}
+        -G ${GENERATOR}
+        ${TOOLSET}
+        -DCMAKE_BUILD_TYPE=Debug
+        -DCMAKE_INSTALL_PREFIX=${CURRENT_PACKAGES_DIR}/debug)
 
-    if(NOT DEFINED VCPKG_BUILD_TYPE OR VCPKG_BUILD_TYPE STREQUAL "debug")
-        message(STATUS "Configuring ${TARGET_TRIPLET}-dbg")
-        file(MAKE_DIRECTORY ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg)
-        vcpkg_execute_required_process(
-            COMMAND ${CMAKE_COMMAND} ${_csc_SOURCE_PATH} ${_csc_OPTIONS} ${_csc_OPTIONS_DEBUG}
-                -G ${GENERATOR}
-                -DCMAKE_BUILD_TYPE=Debug
-                -DCMAKE_INSTALL_PREFIX=${CURRENT_PACKAGES_DIR}/debug
-            WORKING_DIRECTORY ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg
-            LOGNAME config-${TARGET_TRIPLET}-dbg
+    if(NINJA_CAN_BE_USED AND CMAKE_HOST_SYSTEM_NAME STREQUAL "Windows")
+
+        vcpkg_find_acquire_program(NINJA)
+        get_filename_component(NINJA_PATH ${NINJA} DIRECTORY)
+        set(ENV{PATH} "$ENV{PATH};${NINJA_PATH}")
+
+        #parallelize the configure step
+        set(_contents
+            "rule CreateProcess\n  command = $process\n\n"
         )
-        message(STATUS "Configuring ${TARGET_TRIPLET}-dbg done")
+
+        if(NOT DEFINED VCPKG_BUILD_TYPE OR VCPKG_BUILD_TYPE STREQUAL "release")
+            set(rel_line "build ../CMakeCache.txt: CreateProcess\n  process = cmd /c \"cd .. &&")
+            foreach(arg ${rel_command})
+                set(rel_line "${rel_line} \"${arg}\"")
+            endforeach()
+            set(_contents "${_contents}${rel_line}\"\n\n")
+        endif()
+
+        if(NOT DEFINED VCPKG_BUILD_TYPE OR VCPKG_BUILD_TYPE STREQUAL "debug")
+            set(dbg_line "build ../../${TARGET_TRIPLET}-dbg/CMakeCache.txt: CreateProcess\n  process = cmd /c \"cd ../../${TARGET_TRIPLET}-dbg &&")
+            foreach(arg ${dbg_command})
+                set(dbg_line "${dbg_line} \"${arg}\"")
+            endforeach()
+            set(_contents "${_contents}${dbg_line}\"\n\n")
+        endif()
+
+        file(MAKE_DIRECTORY ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel/vcpkg-parallel-configure)
+        file(WRITE ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel/vcpkg-parallel-configure/build.ninja "${_contents}")
+
+        message(STATUS "Configuring ${TARGET_TRIPLET}")
+        vcpkg_execute_required_process(
+            COMMAND ninja -v
+            WORKING_DIRECTORY ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel/vcpkg-parallel-configure
+            LOGNAME config-${TARGET_TRIPLET}
+        )
+        message(STATUS "Configuring ${TARGET_TRIPLET} done")
+    else()
+        if(NOT DEFINED VCPKG_BUILD_TYPE OR VCPKG_BUILD_TYPE STREQUAL "release")
+            message(STATUS "Configuring ${TARGET_TRIPLET}-rel")
+            file(MAKE_DIRECTORY ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel)
+            vcpkg_execute_required_process(
+                COMMAND ${rel_command}
+                WORKING_DIRECTORY ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-rel
+                LOGNAME config-${TARGET_TRIPLET}-rel
+            )
+            message(STATUS "Configuring ${TARGET_TRIPLET}-rel done")
+        endif()
+
+        if(NOT DEFINED VCPKG_BUILD_TYPE OR VCPKG_BUILD_TYPE STREQUAL "debug")
+            message(STATUS "Configuring ${TARGET_TRIPLET}-dbg")
+            file(MAKE_DIRECTORY ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg)
+            vcpkg_execute_required_process(
+                COMMAND ${dbg_command}
+                WORKING_DIRECTORY ${CURRENT_BUILDTREES_DIR}/${TARGET_TRIPLET}-dbg
+                LOGNAME config-${TARGET_TRIPLET}-dbg
+            )
+            message(STATUS "Configuring ${TARGET_TRIPLET}-dbg done")
+        endif()
     endif()
 
     set(_VCPKG_CMAKE_GENERATOR "${GENERATOR}" PARENT_SCOPE)

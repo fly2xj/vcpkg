@@ -33,7 +33,21 @@ When setting this variable to `WindowsStore`, you must also set `VCPKG_CMAKE_SYS
 ### VCPKG_PLATFORM_TOOLSET
 Specifies the C/C++ compiler toolchain to use.
 
+Works only with `cmake` and `msbuild` based ports.
+
 This can be set to `v141`, `v140`, or left blank. If left blank, we select the latest compiler toolset available on your machine.
+
+This can be set to `v141_xp` or `v140_xp` to build libraries in Windows XP compatibility mode. You must also set `VCPKG_LINKER_SUBSYSTEM` to `CONSOLE` and `VCPKG_LINKER_SUBSYSTEM_MINIMUM_VERSION` to `5.1`.
+
+### VCPKG_LINKER_SUBSYSTEM
+Specifies the desired linker subsystem. This will transform into the first part of the `/SUBSYSTEM:` linker directive.
+
+See https://docs.microsoft.com/en-us/cpp/build/reference/subsystem-specify-subsystem for valid options.
+
+### VCPKG_LINKER_SUBSYSTEM_MINIMUM_VERSION
+Specifies the desired linker subsystem minimum version. This requires also defining `VCPKG_LINKER_SUBSYSTEM`.
+
+See https://docs.microsoft.com/en-us/cpp/build/reference/subsystem-specify-subsystem for valid options.
 
 ## Per-port customization
 The CMake Macro `PORT` will be set when interpreting the triplet file and can be used to change settings (such as `VCPKG_LIBRARY_LINKAGE`) on a per-port basis.
